@@ -7,6 +7,9 @@
 //
 
 #import "AppDelegate.h"
+#import "ViewController.h"
+#import <CommonCrypto/CommonDigest.h>
+#import "UIImage+Thumb.h"
 
 @implementation AppDelegate
 
@@ -19,6 +22,17 @@
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     // Override point for customization after application launch.
     self.window.backgroundColor = [UIColor whiteColor];
+    
+    ViewController *vc = [[ViewController alloc] init];
+    UINavigationController *navCtrl = [[UINavigationController alloc] initWithRootViewController:vc];
+    navCtrl.navigationBarHidden = YES;
+    if ([self.window respondsToSelector:@selector(setRootViewController:)]) {
+        self.window.rootViewController = navCtrl;
+    } else {
+        [self.window addSubview:navCtrl.view];
+    }
+    //扫描文件夹目录
+    [self refreshFileData];
     [self.window makeKeyAndVisible];
     return YES;
 }
@@ -38,6 +52,7 @@
 - (void)applicationWillEnterForeground:(UIApplication *)application
 {
     // Called as part of the transition from the background to the inactive state; here you can undo many of the changes made on entering the background.
+    [self refreshFileData];
 }
 
 - (void)applicationDidBecomeActive:(UIApplication *)application
@@ -145,5 +160,206 @@
 {
     return [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] lastObject];
 }
+
+
+- (void)refreshFileData{
+    NSError *error;
+    
+    NSMutableArray *menuNameArr = [[NSMutableArray alloc] initWithObjects:@"全部文档浏览",@"汉高粘合剂",@"通用工业",@"工业粘合剂",@"汽车_航空_钢铁应用",@"民用及工匠建筑类应用",@"电子",@"汉高调查问卷入口", nil];
+    
+    NSManagedObjectContext *managedObjectContext = ((AppDelegate *)[UIApplication sharedApplication].delegate).managedObjectContext;
+    
+    NSString* docPath = [NSHomeDirectory() stringByAppendingPathComponent: @"Documents"];
+    
+    NSMutableArray *filearr = [[NSMutableArray alloc] init];
+    
+    for (int i=1; i<[menuNameArr count]-1; i++) {
+        NSString* path = [NSString stringWithFormat: @"%@/%@", docPath, [menuNameArr objectAtIndex:i]];
+        
+        //判断文件夹是否存在
+        if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            [[NSFileManager defaultManager] createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+            NSURL *fu = [NSURL fileURLWithPath:path];
+            BOOL success = [fu setResourceValue: [NSNumber numberWithBool: YES]
+                                         forKey: NSURLIsExcludedFromBackupKey error: &error];
+            if(!success){
+                NSLog(@"Error excluding %@ from backup %@", [fu lastPathComponent], error);
+            }else{
+                NSLog(@"Success excluding %@ from backup", [fu lastPathComponent]);
+            }
+        }
+        
+        
+        
+        //扫瞄该文件夹内容
+        NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:path error:nil];
+        for (int j=0; j<[files count]; j++) {
+            NSString *filename = [files objectAtIndex:j];
+            NSString *ext = [[filename pathExtension] lowercaseString];
+            if ([ext isEqualToString:@"pdf"]) {
+                NSFetchRequest *fetchRequest = [NSFetchRequest fetchRequestWithEntityName:@"HgFiles"];
+                fetchRequest.predicate = [NSPredicate predicateWithFormat:@"dirname=%d && filename=%@",i,filename];
+                NSArray *theModelsArray = [managedObjectContext executeFetchRequest:fetchRequest error:&error];
+                if ([theModelsArray count]==0) {
+                    HgFiles *hgfile = [NSEntityDescription insertNewObjectForEntityForName:@"HgFiles" inManagedObjectContext:managedObjectContext];
+                    hgfile.filename = filename;
+                    hgfile.dirname = [NSNumber numberWithInt:i];
+                    
+                    NSFileManager* fm = [NSFileManager defaultManager];
+                    NSDictionary* attrs = [fm attributesOfItemAtPath:path error:nil];
+                    
+                    if (attrs != nil) {
+                        hgfile.createtime = (NSDate*)[attrs objectForKey: NSFileCreationDate];
+                    }
+                    
+                    
+                    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+                    NSString *documentsDirectory = [paths objectAtIndex:0];
+                    
+                    NSString *tmpfile = [self  md5:[NSString stringWithFormat:@"%@%@",hgfile.createtime,hgfile.filename]];
+                    NSString *fullpath = [documentsDirectory stringByAppendingPathComponent:tmpfile];
+                    
+                    
+                    if (![[NSFileManager defaultManager] fileExistsAtPath:fullpath]) {
+                        [filearr addObject:hgfile];
+                    }
+                    
+                  
+                }
+            }
+        }
+        
+        
+        //根目录下的
+        NSArray *files2 = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:docPath error:nil];
+        for (int j=0; j<[files2 count]; j++) {
+            NSString *filename = [files2 objectAtIndex:j];
+            NSString *ext = [[filename pathExtension] lowercaseString];
+            if (![self fileIsDirectory:filename] && [ext isEqualToString:@"pdf"]) {
+                NSFetchRequest *fetchRequest = [NSFetchRequest fetchRequestWithEntityName:@"HgFiles"];
+                fetchRequest.predicate = [NSPredicate predicateWithFormat:@"dirname=%d && filename=%@",0,filename];
+                NSArray *theModelsArray = [managedObjectContext executeFetchRequest:fetchRequest error:&error];
+                if ([theModelsArray count]==0) {
+                    HgFiles *hgfile = [NSEntityDescription insertNewObjectForEntityForName:@"HgFiles" inManagedObjectContext:managedObjectContext];
+                    hgfile.filename = filename;
+                    hgfile.dirname = [NSNumber numberWithInt:0];
+                    
+                    NSFileManager* fm = [NSFileManager defaultManager];
+                    NSDictionary* attrs = [fm attributesOfItemAtPath:path error:nil];
+                    
+                    if (attrs != nil) {
+                        hgfile.createtime = (NSDate*)[attrs objectForKey: NSFileCreationDate];
+                    }
+                    
+                    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+                    NSString *documentsDirectory = [paths objectAtIndex:0];
+                    
+                    NSString *tmpfile = [self  md5:[NSString stringWithFormat:@"%@%@",hgfile.createtime,hgfile.filename]];
+                    NSString *fullpath = [documentsDirectory stringByAppendingPathComponent:tmpfile];
+                    
+                    
+                    if (![[NSFileManager defaultManager] fileExistsAtPath:fullpath]) {
+                        [filearr addObject:hgfile];
+                    }
+                    
+                    
+                }
+            }
+        }
+    }
+    
+    for (int i=0; i<[filearr count]; i++) {
+        [NSThread sleepForTimeInterval:1];
+        [NSThread detachNewThreadSelector:@selector(createImage:) toTarget:self withObject:[filearr objectAtIndex:i]];
+    }
+    
+}
+
+- (BOOL)fileIsDirectory:(NSString *)path {
+	BOOL isdir = NO;
+	[[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isdir];
+	return isdir;
+}
+
+
+- (void)createImage:(HgFiles *)data{
+    //UIImage *img = [self getPdfThumbnail:path];
+    //UIImage *img;
+    
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documentsDirectory = [paths objectAtIndex:0];
+    
+    NSString *tmpfile = [self md5:[NSString stringWithFormat:@"%@%@",data.createtime,data.filename]];
+    NSString *fullpath = [documentsDirectory stringByAppendingPathComponent:tmpfile];
+    
+    NSLog(@"creating:%@",fullpath);
+    
+    if (![[NSFileManager defaultManager] fileExistsAtPath:fullpath])
+    {
+        NSLog(@"is in creating....");
+        NSString* docPath = [NSHomeDirectory() stringByAppendingPathComponent: @"Documents"];
+        NSString *path = [NSString stringWithFormat:@"%@/%@/%@",docPath,data.dirname ,data.filename];
+        if ([data.dirname intValue]==0) {
+            path = [NSString stringWithFormat:@"%@/%@",docPath,data.filename];
+        }
+        
+        UIImage *thumbImage=[self getPdfThumbnail:path];
+        
+        UIImage *thb2 = [thumbImage scaleToSize:CGSizeMake(223, 286)];
+        
+        NSData *imagedata =UIImagePNGRepresentation(thb2);
+        
+        [imagedata writeToFile:fullpath atomically:YES];
+    }
+    //img = [UIImage imageWithContentsOfFile:fullpath];
+    
+    
+}
+
+-(NSString *)md5:(NSString *)str {
+    const char *cStr = [str UTF8String];
+    unsigned char result[32];
+    CC_MD5( cStr, strlen(cStr), result );
+    return [NSString stringWithFormat:
+            @"%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+            result[0], result[1], result[2], result[3],
+            result[4], result[5], result[6], result[7],
+            result[8], result[9], result[10], result[11],
+            result[12], result[13], result[14], result[15]
+            ];
+}
+
+#pragma mark - Functions
+- (UIImage *)getPdfThumbnail:(NSString *)finalPath{
+    
+    CFStringRef path = CFStringCreateWithCString(NULL, [finalPath UTF8String], kCFStringEncodingUTF8);
+	CFURLRef url = CFURLCreateWithFileSystemPath(NULL, path, kCFURLPOSIXPathStyle, 0);
+    CGPDFDocumentRef documentRef = CGPDFDocumentCreateWithURL(url);
+    
+
+    //取得指定页面的内容
+    UIImage *image;
+    CGPDFPageRef page = CGPDFDocumentGetPage(documentRef,1);
+    if (page) {
+        CGRect pageSize = CGPDFPageGetBoxRect(page, kCGPDFMediaBox);//(595.276,807.874)
+        //CGContextRef作成
+        CGContextRef outContext =CGBitmapContextCreate(NULL,pageSize.size.width,pageSize.size.height,8,0,CGColorSpaceCreateDeviceRGB(),kCGImageAlphaPremultipliedLast);
+        if (outContext)
+        {
+            //缩略图表示用image的输出
+            CGContextDrawPDFPage(outContext, page);
+            CGImageRef pdfImageRef = CGBitmapContextCreateImage(outContext);
+            CGContextRelease(outContext);
+            image = [UIImage imageWithCGImage:pdfImageRef];
+            
+            CGImageRelease(pdfImageRef);
+            
+        }
+    }
+    return image;
+}
+
+
+
 
 @end
